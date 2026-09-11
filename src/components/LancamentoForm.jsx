@@ -86,7 +86,7 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
           {/* Foto */}
           <div>
             <label style={rotulo}>Foto do hidrômetro</label>
-            <input ref={inputFotoRef} type="file" accept="image/*" capture="environment" onChange={aoEscolherFoto} style={{ display: 'none' }} />
+            <input ref={inputFotoRef} type="file" accept="image/*" onChange={aoEscolherFoto} style={{ display: 'none' }} />
             {fotoPreview ? (
               <div style={{ position: 'relative' }}>
                 <img src={fotoPreview} alt="Foto do hidrômetro" style={{ width: '100%', borderRadius: 12, maxHeight: 260, objectFit: 'cover' }} />
