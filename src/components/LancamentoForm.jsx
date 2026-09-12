@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { comprimirImagem } from '../lib/image'
-import { salvarLancamento } from '../lib/sync'
+import { salvarLancamento, excluirLancamento } from '../lib/sync'
 import { hojeISO } from '../lib/format'
 
 export default function LancamentoForm({ condominio, unidades, mesReferencia, lancamentoExistente, onFechar, onSalvo }) {
@@ -18,6 +18,8 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
   const [salvando, setSalvando] = useState(false)
   const [erro, setErro] = useState(null)
   const [processandoFoto, setProcessandoFoto] = useState(false)
+  const [confirmandoExclusao, setConfirmandoExclusao] = useState(false)
+  const [excluindo, setExcluindo] = useState(false)
 
   const quadras = useMemo(() => {
     const s = new Set(unidades.map((u) => u.quadra))
@@ -67,6 +69,20 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
       setErro('Não foi possível salvar. Tente novamente.')
     } finally {
       setSalvando(false)
+    }
+  }
+
+  async function aoExcluir() {
+    setExcluindo(true)
+    setErro(null)
+    try {
+      await excluirLancamento(condominio, lancamentoExistente)
+      onSalvo()
+    } catch (e) {
+      console.error(e)
+      setErro('Não foi possível apagar. Tente novamente.')
+      setExcluindo(false)
+      setConfirmandoExclusao(false)
     }
   }
 
@@ -144,6 +160,28 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
             <button onClick={aoSalvar} disabled={!podeSalvar} className="btn btn-verde btn-bloco">
               {salvando ? 'SALVANDO...' : 'SALVAR'}
             </button>
+          )}
+
+          {editando && !confirmandoExclusao && (
+            <button onClick={() => setConfirmandoExclusao(true)} className="btn btn-fantasma btn-bloco" style={{ borderColor: 'var(--vermelho)', color: 'var(--vermelho)' }}>
+              🗑 APAGAR LANÇAMENTO
+            </button>
+          )}
+
+          {editando && confirmandoExclusao && (
+            <div className="card" style={{ padding: 16, borderColor: 'var(--vermelho)' }}>
+              <p style={{ textTransform: 'none', fontSize: 13, marginBottom: 12, color: 'var(--texto)' }}>
+                Tem certeza que quer apagar o lançamento de <strong>{lancamentoExistente.etiqueta}</strong> desse mês? Essa ação não pode ser desfeita.
+              </p>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={() => setConfirmandoExclusao(false)} disabled={excluindo} className="btn btn-fantasma" style={{ flex: 1 }}>
+                  CANCELAR
+                </button>
+                <button onClick={aoExcluir} disabled={excluindo} className="btn btn-vermelho" style={{ flex: 1 }}>
+                  {excluindo ? 'APAGANDO...' : 'SIM, APAGAR'}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       </div>
