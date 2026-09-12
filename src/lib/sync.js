@@ -79,10 +79,12 @@ export async function carregarLeituras(condominio, mesReferencia) {
   }
 
   const pendentes = await listarPendentesPorMes(condominio.slug, mesReferencia)
-  const idsSubstituidos = new Set(pendentes.filter((p) => p.tipo === 'update').map((p) => p.remoteLeituraId))
-  const semSobrepostas = base.filter((l) => !idsSubstituidos.has(l.id))
+  const idsOcultar = new Set(
+    pendentes.filter((p) => p.tipo === 'update' || p.tipo === 'delete').map((p) => p.remoteLeituraId),
+  )
+  const semSobrepostas = base.filter((l) => !idsOcultar.has(l.id))
 
-  const pendentesComoLeitura = pendentes.map(pendenteParaLeitura)
+  const pendentesComoLeitura = pendentes.filter((p) => p.tipo !== 'delete').map(pendenteParaLeitura)
   const todas = [...semSobrepostas, ...pendentesComoLeitura]
   todas.sort((a, b) => (a.etiqueta > b.etiqueta ? 1 : -1))
   return todas
@@ -99,6 +101,7 @@ function mapLeituraRemota(row) {
     mesReferencia: row.mes_referencia,
     leitura: row.leitura,
     fotoUrl: row.foto_url,
+    fotoPath: row.foto_path,
     fotoBlobLocal: null,
     dataLeitura: row.data_leitura,
     criadoEm: row.criado_em,
@@ -196,6 +199,40 @@ export async function salvarLancamento({
   return { pendente: true, localId }
 }
 
+// ---------------- Excluir lançamento ----------------
+export async function excluirLancamento(condominio, lancamento) {
+  // Ainda não sincronizado (só existe no aparelho): remove direto da fila.
+  if (lancamento.pendente) {
+    await removerPendente(lancamento.localId)
+    return
+  }
+
+  if (estaOnline() && supabase) {
+    const { error } = await supabase.from('leituras').delete().eq('id', lancamento.id)
+    if (error) throw error
+    if (lancamento.fotoPath) {
+      try { await supabase.storage.from(BUCKET).remove([lancamento.fotoPath]) } catch { /* não bloqueia a exclusão */ }
+    }
+    return
+  }
+
+  // Offline e já estava sincronizado: guarda a exclusão na fila pra rodar quando voltar o sinal.
+  await adicionarPendente({
+    tipo: 'delete',
+    remoteLeituraId: lancamento.id,
+    condominioSlug: condominio.slug,
+    unidadeId: lancamento.unidadeId,
+    etiqueta: lancamento.etiqueta,
+    quadra: lancamento.quadra,
+    lote: lancamento.lote,
+    fase: lancamento.fase,
+    mesReferencia: lancamento.mesReferencia,
+    leitura: lancamento.leitura,
+    dataLeitura: lancamento.dataLeitura,
+    fotoBlob: null,
+  })
+}
+
 // ---------------- Sincronização da fila ----------------
 let sincronizando = false
 const ouvintes = new Set()
@@ -221,6 +258,14 @@ export async function tentarSincronizar() {
     const pendentes = await db.getAll('pendentes')
     for (const p of pendentes) {
       try {
+        if (p.tipo === 'delete') {
+          if (p.remoteLeituraId) {
+            const { error } = await supabase.from('leituras').delete().eq('id', p.remoteLeituraId)
+            if (error) throw error
+          }
+          await removerPendente(p.localId)
+          continue
+        }
         let fotoPath = null
         let fotoUrl = null
         if (p.fotoBlob) {
