@@ -21,7 +21,11 @@ export default function Header({ titulo, voltar }) {
           SAIR
         </button>
       </div>
-      {!online && <div className="status-off">SEM SINAL — OS LANÇAMENTOS FICAM SALVOS NO APARELHO E SOBEM SOZINHOS QUANDO VOLTAR O SINAL</div>}
+      {!online && (
+        <div className="status-off">
+          SEM SINAL {pendentes > 0 ? `— ${pendentes} LANÇAMENTO(S) SALVOS NO APARELHO` : ''} — NÃO FECHE O APP NEM APAGUE OS DADOS DO NAVEGADOR ANTES DE SINCRONIZAR
+        </div>
+      )}
       {online && pendentes > 0 && <div className="status-sync">SINCRONIZANDO {pendentes} LANÇAMENTO(S) PENDENTE(S)...</div>}
     </>
   )
