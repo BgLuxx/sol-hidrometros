@@ -306,4 +306,8 @@ export async function tentarSincronizar() {
 if (typeof window !== 'undefined') {
   window.addEventListener('online', () => tentarSincronizar())
   setInterval(() => { if (estaOnline()) tentarSincronizar() }, 30000)
+  // Tenta sincronizar assim que o app abre — cobre o caso de reabrir o app
+  // já com sinal (ex: lançou de manhã sem sinal, fechou o app, reabriu à
+  // tarde já com sinal) sem precisar esperar os 30s do intervalo acima.
+  if (estaOnline()) tentarSincronizar()
 }
