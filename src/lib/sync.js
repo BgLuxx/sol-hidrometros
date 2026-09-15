@@ -9,9 +9,42 @@ import {
 import { CONDOMINIOS_SEED } from '../data/condominios'
 
 const BUCKET = 'hidrometros'
+const TEMPO_LIMITE_MS = 7000 // sinal fraco: não trava esperando, cai pro modo offline
 
 export function estaOnline() {
   return typeof navigator === 'undefined' ? true : navigator.onLine
+}
+
+// navigator.onLine só diz se o celular tem alguma rede ligada, não se ela
+// realmente consegue completar um envio (comum com sinal fraco/instável).
+// Por isso toda tentativa "online" tem um prazo — se estourar, tratamos como
+// falha e caímos no fluxo offline (salva local na hora, sincroniza depois).
+function comLimiteDeTempo(promessa, ms = TEMPO_LIMITE_MS) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('tempo_esgotado_sinal_fraco')), ms)
+    promessa.then(
+      (v) => { clearTimeout(timer); resolve(v) },
+      (e) => { clearTimeout(timer); reject(e) },
+    )
+  })
+}
+
+// Em local com sinal ruim (tipo "no meio do mato"), o celular fica marcando
+// "tem sinal" o tempo todo mesmo sem conseguir enviar nada. Sem isso, CADA
+// lançamento pagaria os 7s de espera acima antes de cair pro offline — em
+// 300 hidrômetros isso vira muito tempo perdido. Então, depois da primeira
+// falha/demora, a gente já assume "sinal ruim por aqui" por um tempo e
+// salva direto local, sem nem tentar de novo — instantâneo de verdade.
+const PAUSA_TENTATIVA_ONLINE_MS = 45000
+let sinalRuimAteMs = 0
+function sinalPareceRuim() {
+  return Date.now() < sinalRuimAteMs
+}
+function marcarSinalRuim() {
+  sinalRuimAteMs = Date.now() + PAUSA_TENTATIVA_ONLINE_MS
+}
+function marcarSinalOk() {
+  sinalRuimAteMs = 0
 }
 
 // ---------------- Condomínios ----------------
@@ -145,15 +178,15 @@ export async function salvarLancamento({
     return { pendente: true }
   }
 
-  if (estaOnline() && supabase) {
+  if (estaOnline() && supabase && !sinalPareceRuim()) {
     try {
       let fotoPath = null
       let fotoUrl = null
       if (fotoBlob) {
         const caminho = `${condominio.slug}/${mesReferencia}/${unidade.etiqueta}-${Date.now()}.jpg`
-        const { error: upErr } = await supabase.storage.from(BUCKET).upload(caminho, fotoBlob, {
-          contentType: 'image/jpeg', upsert: true,
-        })
+        const { error: upErr } = await comLimiteDeTempo(
+          supabase.storage.from(BUCKET).upload(caminho, fotoBlob, { contentType: 'image/jpeg', upsert: true }),
+        )
         if (upErr) throw upErr
         fotoPath = caminho
         fotoUrl = supabase.storage.from(BUCKET).getPublicUrl(caminho).data.publicUrl
@@ -169,15 +202,17 @@ export async function salvarLancamento({
 
       let resultado
       if (leituraExistenteId) {
-        resultado = await supabase.from('leituras').update(payload).eq('id', leituraExistenteId).select().single()
+        resultado = await comLimiteDeTempo(supabase.from('leituras').update(payload).eq('id', leituraExistenteId).select().single())
       } else {
-        resultado = await supabase.from('leituras').upsert(payload, { onConflict: 'unidade_id,mes_referencia' }).select().single()
+        resultado = await comLimiteDeTempo(supabase.from('leituras').upsert(payload, { onConflict: 'unidade_id,mes_referencia' }).select().single())
       }
       if (resultado.error) throw resultado.error
+      marcarSinalOk()
       return { pendente: false, leitura: resultado.data }
     } catch (e) {
-      console.warn('Falha ao salvar online, colocando na fila offline.', e)
-      // cai para o fluxo offline abaixo
+      console.warn('Falha ao salvar online (ou sinal fraco demorou), colocando na fila offline.', e)
+      marcarSinalRuim()
+      // cai para o fluxo offline abaixo — salva local na hora, sincroniza quando der
     }
   }
 
@@ -208,12 +243,17 @@ export async function excluirLancamento(condominio, lancamento) {
   }
 
   if (estaOnline() && supabase) {
-    const { error } = await supabase.from('leituras').delete().eq('id', lancamento.id)
-    if (error) throw error
-    if (lancamento.fotoPath) {
-      try { await supabase.storage.from(BUCKET).remove([lancamento.fotoPath]) } catch { /* não bloqueia a exclusão */ }
+    try {
+      const { error } = await comLimiteDeTempo(supabase.from('leituras').delete().eq('id', lancamento.id))
+      if (error) throw error
+      if (lancamento.fotoPath) {
+        try { await comLimiteDeTempo(supabase.storage.from(BUCKET).remove([lancamento.fotoPath])) } catch { /* não bloqueia a exclusão */ }
+      }
+      return
+    } catch (e) {
+      console.warn('Falha ao apagar online (ou sinal fraco demorou), colocando na fila offline.', e)
+      // cai para o fluxo offline abaixo
     }
-    return
   }
 
   // Offline e já estava sincronizado: guarda a exclusão na fila pra rodar quando voltar o sinal.
@@ -247,7 +287,7 @@ async function avisarOuvintes() {
 }
 
 export async function tentarSincronizar() {
-  if (sincronizando || !estaOnline() || !supabase) {
+  if (sincronizando || !estaOnline() || !supabase || sinalPareceRuim()) {
     await avisarOuvintes()
     return
   }
@@ -260,7 +300,7 @@ export async function tentarSincronizar() {
       try {
         if (p.tipo === 'delete') {
           if (p.remoteLeituraId) {
-            const { error } = await supabase.from('leituras').delete().eq('id', p.remoteLeituraId)
+            const { error } = await comLimiteDeTempo(supabase.from('leituras').delete().eq('id', p.remoteLeituraId))
             if (error) throw error
           }
           await removerPendente(p.localId)
@@ -270,9 +310,9 @@ export async function tentarSincronizar() {
         let fotoUrl = null
         if (p.fotoBlob) {
           const caminho = `${p.condominioSlug}/${p.mesReferencia}/${p.etiqueta}-${p.localId}-${Date.now()}.jpg`
-          const { error: upErr } = await supabase.storage.from(BUCKET).upload(caminho, p.fotoBlob, {
-            contentType: 'image/jpeg', upsert: true,
-          })
+          const { error: upErr } = await comLimiteDeTempo(
+            supabase.storage.from(BUCKET).upload(caminho, p.fotoBlob, { contentType: 'image/jpeg', upsert: true }),
+          )
           if (upErr) throw upErr
           fotoPath = caminho
           fotoUrl = supabase.storage.from(BUCKET).getPublicUrl(caminho).data.publicUrl
@@ -286,15 +326,18 @@ export async function tentarSincronizar() {
         }
         let resultado
         if (p.tipo === 'update' && p.remoteLeituraId) {
-          resultado = await supabase.from('leituras').update(payload).eq('id', p.remoteLeituraId).select().single()
+          resultado = await comLimiteDeTempo(supabase.from('leituras').update(payload).eq('id', p.remoteLeituraId).select().single())
         } else {
-          resultado = await supabase.from('leituras').upsert(payload, { onConflict: 'unidade_id,mes_referencia' }).select().single()
+          resultado = await comLimiteDeTempo(supabase.from('leituras').upsert(payload, { onConflict: 'unidade_id,mes_referencia' }).select().single())
         }
         if (resultado.error) throw resultado.error
         await removerPendente(p.localId)
+        marcarSinalOk()
       } catch (e) {
         console.warn('Item continua pendente (falhou ao sincronizar):', p.etiqueta, e)
         await atualizarPendente(p.localId, { tentativas: (p.tentativas || 0) + 1 })
+        marcarSinalRuim()
+        break // sinal ruim agora — não vale a pena pagar o prazo de novo pra cada item restante da fila
       }
     }
   } finally {
@@ -304,7 +347,9 @@ export async function tentarSincronizar() {
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => tentarSincronizar())
+  // Uma transição real pra "online" (ex: pegou wifi de verdade) merece uma
+  // chance nova, mesmo que estivéssemos numa pausa por sinal ruim.
+  window.addEventListener('online', () => { marcarSinalOk(); tentarSincronizar() })
   setInterval(() => { if (estaOnline()) tentarSincronizar() }, 30000)
   // Tenta sincronizar assim que o app abre — cobre o caso de reabrir o app
   // já com sinal (ex: lançou de manhã sem sinal, fechou o app, reabriu à
