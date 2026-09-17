@@ -23,10 +23,10 @@ export default function Header({ titulo, voltar }) {
       </div>
       {!online && (
         <div className="status-off">
-          SEM SINAL {pendentes > 0 ? `— ${pendentes} LANÇAMENTO(S) SALVOS NO APARELHO` : ''} — NÃO FECHE O APP NEM APAGUE OS DADOS DO NAVEGADOR ANTES DE SINCRONIZAR
+          SEM SINAL {pendentes > 0 ? `— ${pendentes} ITEM(S) SALVOS NO APARELHO` : ''} — NÃO FECHE O APP NEM APAGUE OS DADOS DO NAVEGADOR ANTES DE SINCRONIZAR
         </div>
       )}
-      {online && pendentes > 0 && <div className="status-sync">SINCRONIZANDO {pendentes} LANÇAMENTO(S) PENDENTE(S)...</div>}
+      {online && pendentes > 0 && <div className="status-sync">SINCRONIZANDO {pendentes} ITEM(S) PENDENTE(S)...</div>}
     </>
   )
 }
