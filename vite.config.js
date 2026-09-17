@@ -27,6 +27,16 @@ export default defineConfig({
         // App shell + code precached -> app abre offline.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
+        // Sem isso, o Service Worker instalado na PRIMEIRA visita só passa a
+        // controlar a página a partir da PRÓXIMA vez que abrir o site — ou
+        // seja, se a pessoa instalar e for direto pro modo avião, ainda não
+        // tem ninguém "no comando" pra servir o app do cache, e o
+        // Safari/Chrome tenta ir na rede de verdade e falha. Com isso aqui,
+        // assim que o Service Worker termina de instalar (poucos segundos),
+        // ele já assume o controle na hora, sem precisar de uma 2ª visita.
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             // Fotos e dados do Supabase: tenta rede, cai pro cache quando não há sinal.
