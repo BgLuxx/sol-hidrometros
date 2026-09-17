@@ -4,9 +4,11 @@ import { openDB } from 'idb'
 // - "unidades_cache": lista de quadras/lotes de cada condomínio (baixada 1x, usada offline depois)
 // - "leituras_cache": leituras já sincronizadas, guardadas localmente para ver a lista offline
 // - "pendentes": lançamentos feitos offline (ou que falharam ao enviar), na fila para sincronizar
+// - "unidades_pendentes": quadra/lote (ou leitura avulsa, tipo portaria) cadastrada em campo
+//   sem sinal — fica na fila até sincronizar e virar uma unidade de verdade no banco
 
 const DB_NAME = 'sol-hidrometros'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 export async function getDB() {
   return openDB(DB_NAME, DB_VERSION, {
@@ -24,6 +26,10 @@ export async function getDB() {
       if (!db.objectStoreNames.contains('pendentes')) {
         const store = db.createObjectStore('pendentes', { keyPath: 'localId', autoIncrement: true })
         store.createIndex('por_chave', 'chave')
+      }
+      if (!db.objectStoreNames.contains('unidades_pendentes')) {
+        const store = db.createObjectStore('unidades_pendentes', { keyPath: 'localId', autoIncrement: true })
+        store.createIndex('por_condominio', 'condominioSlug')
       }
     },
   })
@@ -93,5 +99,34 @@ export async function atualizarPendente(localId, dados) {
 }
 export async function contarPendentes() {
   const db = await getDB()
-  return db.count('pendentes')
+  const [lancamentos, unidades] = await Promise.all([
+    db.count('pendentes'),
+    db.count('unidades_pendentes'),
+  ])
+  return lancamentos + unidades
+}
+
+// ---------- fila de unidades pendentes (quadra/lote ou leitura avulsa cadastrada sem sinal) ----------
+export async function adicionarUnidadePendente(item) {
+  const db = await getDB()
+  const localId = await db.add('unidades_pendentes', { ...item, tentativas: 0, criadoLocalEm: Date.now() })
+  return localId
+}
+export async function listarUnidadesPendentes(condominioSlug) {
+  const db = await getDB()
+  return db.getAllFromIndex('unidades_pendentes', 'por_condominio', condominioSlug)
+}
+export async function listarTodasUnidadesPendentes() {
+  const db = await getDB()
+  return db.getAll('unidades_pendentes')
+}
+export async function removerUnidadePendente(localId) {
+  const db = await getDB()
+  await db.delete('unidades_pendentes', localId)
+}
+export async function atualizarUnidadePendente(localId, dados) {
+  const db = await getDB()
+  const atual = await db.get('unidades_pendentes', localId)
+  if (!atual) return
+  await db.put('unidades_pendentes', { ...atual, ...dados })
 }

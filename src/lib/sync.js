@@ -5,6 +5,7 @@ import {
   salvarLeiturasCache, lerLeiturasCache,
   adicionarPendente, listarPendentesPorMes, removerPendente, atualizarPendente,
   contarPendentes,
+  adicionarUnidadePendente, listarUnidadesPendentes, listarTodasUnidadesPendentes, removerUnidadePendente,
 } from './localdb'
 import { CONDOMINIOS_SEED } from '../data/condominios'
 
@@ -51,14 +52,16 @@ function marcarSinalOk() {
 export async function carregarCondominios() {
   if (estaOnline() && supabase) {
     try {
-      const { data, error } = await supabase.from('condominios').select('id, slug, nome').order('nome')
+      const { data, error } = await comLimiteDeTempo(
+        supabase.from('condominios').select('id, slug, nome').order('nome'),
+      )
       if (error) throw error
       if (data?.length) {
         await salvarCondominiosCache(data)
         return data
       }
     } catch (e) {
-      console.warn('Falha ao buscar condomínios online, usando cache local.', e)
+      console.warn('Falha ao buscar condomínios online (ou sinal fraco demorou), usando cache local.', e)
     }
   }
   const cache = await lerCondominiosCache()
@@ -69,25 +72,50 @@ export async function carregarCondominios() {
 
 // ---------------- Unidades (quadras/lotes) ----------------
 export async function carregarUnidades(condominio) {
+  let base = []
   if (estaOnline() && supabase) {
     try {
-      const { data, error } = await supabase
-        .from('unidades')
-        .select('*')
-        .eq('condominio_id', condominio.id)
-        .order('ordem')
+      const { data, error } = await comLimiteDeTempo(
+        supabase.from('unidades').select('*').eq('condominio_id', condominio.id).order('ordem'),
+      )
       if (error) throw error
       if (data?.length) {
+        base = data
         await salvarUnidadesCache(condominio.slug, data)
-        return data
       }
     } catch (e) {
-      console.warn('Falha ao buscar unidades online, usando cache local.', e)
+      console.warn('Falha ao buscar unidades online (ou sinal fraco demorou), usando cache local.', e)
     }
   }
-  const cache = await lerUnidadesCache(condominio.slug)
-  if (cache.length) return cache
-  return CONDOMINIOS_SEED[condominio.slug]?.unidades || []
+  if (!base.length) {
+    base = await lerUnidadesCache(condominio.slug)
+    if (!base.length) base = CONDOMINIOS_SEED[condominio.slug]?.unidades || []
+  }
+
+  // Quadra/lote (ou leitura avulsa) cadastrada em campo e ainda não sincronizada:
+  // já aparece na lista/seleção normalmente, marcada como pendente.
+  const unidadesPendentes = await listarUnidadesPendentes(condominio.slug)
+  return [...base, ...unidadesPendentes.map(unidadePendenteParaUnidade)]
+}
+
+function unidadePendenteParaUnidade(p) {
+  return {
+    id: `local-${p.localId}`,
+    localId: p.localId,
+    condominio_id: p.condominioId,
+    etiqueta: p.etiqueta,
+    quadra: p.quadra,
+    lote: p.lote,
+    fase: p.fase,
+    ano_fabricacao: p.ano_fabricacao ?? null,
+    status_hidrometro: null,
+    ano_substituicao: null,
+    leitura_hidrometro_antigo: null,
+    observacao: null,
+    avulsa: p.avulsa || false,
+    ordem: 9999,
+    pendente: true,
+  }
 }
 
 // ---------------- Leituras (lançamentos de um mês) ----------------
@@ -95,11 +123,13 @@ export async function carregarLeituras(condominio, mesReferencia) {
   let base = []
   if (estaOnline() && supabase) {
     try {
-      const { data, error } = await supabase
-        .from('leituras')
-        .select('*, unidades!inner(id, etiqueta, quadra, lote, fase, condominio_id)')
-        .eq('unidades.condominio_id', condominio.id)
-        .eq('mes_referencia', mesReferencia)
+      const { data, error } = await comLimiteDeTempo(
+        supabase
+          .from('leituras')
+          .select('*, unidades!inner(id, etiqueta, quadra, lote, fase, condominio_id)')
+          .eq('unidades.condominio_id', condominio.id)
+          .eq('mes_referencia', mesReferencia),
+      )
       if (error) throw error
       base = (data || []).map(mapLeituraRemota)
       await salvarLeiturasCache(condominio.slug, mesReferencia, base)
@@ -162,6 +192,61 @@ function pendenteParaLeitura(p) {
     pendente: true,
     localId: p.localId,
   }
+}
+
+// ---------------- Cadastrar quadra/lote nova, ou leitura avulsa (ex: portaria) ----------------
+// Usado pelos botões "+ QUADRA/LOTE" e "+ LEITURA AVULSA" na tela do condomínio.
+// unidadeNova: { etiqueta, quadra, lote, fase, anoFabricacao, avulsa }
+export async function criarUnidade({ condominio, etiqueta, quadra, lote, fase, anoFabricacao, avulsa = false }) {
+  if (estaOnline() && supabase && !sinalPareceRuim()) {
+    try {
+      const payload = {
+        condominio_id: condominio.id,
+        etiqueta, quadra, lote, fase,
+        ano_fabricacao: anoFabricacao || null,
+        avulsa,
+        ordem: 9999,
+      }
+      const resultado = await comLimiteDeTempo(
+        supabase.from('unidades').insert(payload).select().single(),
+      )
+      if (resultado.error) throw resultado.error
+      marcarSinalOk()
+      return resultado.data
+    } catch (e) {
+      if (e?.code === '23505' || /duplicate key|already exists/i.test(e?.message || '')) {
+        throw new Error('já_existe')
+      }
+      console.warn('Falha ao cadastrar unidade online (ou sinal fraco demorou), salvando local.', e)
+      marcarSinalRuim()
+      // cai para o fluxo offline abaixo
+    }
+  }
+
+  // Offline (ou falhou ao enviar): guarda na fila local com um id temporário.
+  // Aparece na hora na lista/seleção do condomínio, e vira uma unidade de
+  // verdade no banco assim que o sinal voltar.
+  const localId = await adicionarUnidadePendente({
+    condominioSlug: condominio.slug,
+    condominioId: condominio.id,
+    etiqueta, quadra, lote, fase,
+    ano_fabricacao: anoFabricacao || null,
+    avulsa,
+  })
+  return unidadePendenteParaUnidade({
+    localId, condominioSlug: condominio.slug, condominioId: condominio.id,
+    etiqueta, quadra, lote, fase, ano_fabricacao: anoFabricacao || null, avulsa,
+  })
+}
+
+// "+ LEITURA AVULSA": cadastra a unidade (ex: PORTARIA 03) e já lança a
+// primeira leitura dela num só passo — reaproveita toda a lógica de
+// sinal fraco/offline do salvarLancamento abaixo.
+export async function criarLeituraAvulsa({ condominio, mesReferencia, etiqueta, fase, anoFabricacao, leitura, fotoBlob, dataLeitura }) {
+  const unidade = await criarUnidade({
+    condominio, etiqueta, quadra: 'AVULSO', lote: etiqueta, fase, anoFabricacao, avulsa: true,
+  })
+  return salvarLancamento({ condominio, unidade, mesReferencia, leitura, fotoBlob, dataLeitura })
 }
 
 // ---------------- Criar / editar lançamento ----------------
@@ -295,9 +380,47 @@ export async function tentarSincronizar() {
   try {
     const { getDB } = await import('./localdb')
     const db = await getDB()
+
+    // Primeiro sincroniza quadra/lote e leituras avulsas cadastradas em campo
+    // (viram unidades de verdade no banco) — antes das leituras, porque uma
+    // leitura pode depender de uma unidade que ainda só existe localmente.
+    const unidadesPendentes = await listarTodasUnidadesPendentes()
+    for (const u of unidadesPendentes) {
+      try {
+        const payload = {
+          condominio_id: u.condominioId,
+          etiqueta: u.etiqueta, quadra: u.quadra, lote: u.lote, fase: u.fase,
+          ano_fabricacao: u.ano_fabricacao ?? null,
+          avulsa: u.avulsa || false,
+          ordem: 9999,
+        }
+        const resultado = await comLimiteDeTempo(supabase.from('unidades').insert(payload).select().single())
+        if (resultado.error) throw resultado.error
+        const idLocal = `local-${u.localId}`
+        const idReal = resultado.data.id
+        // Qualquer leitura na fila que aponte pra essa unidade local passa a apontar pro id de verdade.
+        const leiturasLigadas = await db.getAll('pendentes')
+        for (const lp of leiturasLigadas) {
+          if (lp.unidadeId === idLocal) {
+            await atualizarPendente(lp.localId, { unidadeId: idReal })
+          }
+        }
+        await removerUnidadePendente(u.localId)
+        marcarSinalOk()
+      } catch (e) {
+        console.warn('Unidade continua pendente (falhou ao sincronizar):', u.etiqueta, e)
+        marcarSinalRuim()
+        break // sinal ruim agora — as leituras dependentes dela ficam pra próxima rodada
+      }
+    }
+
     const pendentes = await db.getAll('pendentes')
     for (const p of pendentes) {
       try {
+        // A leitura depende de uma unidade cadastrada em campo que ainda não
+        // sincronizou (a unidade some da fila só depois de sincronizar) —
+        // pula por enquanto, tenta de novo na próxima rodada.
+        if (typeof p.unidadeId === 'string' && p.unidadeId.startsWith('local-')) continue
         if (p.tipo === 'delete') {
           if (p.remoteLeituraId) {
             const { error } = await comLimiteDeTempo(supabase.from('leituras').delete().eq('id', p.remoteLeituraId))
