@@ -5,6 +5,8 @@ import MonthPicker from '../components/MonthPicker'
 import FiltroBar from '../components/FiltroBar'
 import LancamentoItem from '../components/LancamentoItem'
 import LancamentoForm from '../components/LancamentoForm'
+import NovaUnidadeForm from '../components/NovaUnidadeForm'
+import LeituraAvulsaForm from '../components/LeituraAvulsaForm'
 import RelatorioMenu from '../components/RelatorioMenu'
 import { carregarCondominios, carregarUnidades, carregarLeituras } from '../lib/sync'
 import { mesAtualISO } from '../lib/format'
@@ -19,6 +21,8 @@ export default function CondominioDetalhe() {
   const [formAberto, setFormAberto] = useState(false)
   const [lancamentoEditando, setLancamentoEditando] = useState(null)
   const [relatorioAberto, setRelatorioAberto] = useState(false)
+  const [novaUnidadeAberta, setNovaUnidadeAberta] = useState(false)
+  const [leituraAvulsaAberta, setLeituraAvulsaAberta] = useState(false)
   const [recarregar, setRecarregar] = useState(0)
 
   useEffect(() => {
@@ -31,7 +35,7 @@ export default function CondominioDetalhe() {
   useEffect(() => {
     if (!condominio) return
     carregarUnidades(condominio).then(setUnidades)
-  }, [condominio])
+  }, [condominio, recarregar])
 
   useEffect(() => {
     if (!condominio) return
@@ -55,6 +59,16 @@ export default function CondominioDetalhe() {
     setRecarregar((n) => n + 1)
   }
 
+  function aoCadastrarUnidade() {
+    setNovaUnidadeAberta(false)
+    setRecarregar((n) => n + 1)
+  }
+
+  function aoSalvarLeituraAvulsa() {
+    setLeituraAvulsaAberta(false)
+    setRecarregar((n) => n + 1)
+  }
+
   if (!condominio) return null
 
   return (
@@ -68,12 +82,21 @@ export default function CondominioDetalhe() {
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
           <button onClick={() => { setLancamentoEditando(null); setFormAberto(true) }} className="btn btn-azul">
             + LANÇAR HIDRÔMETRO
           </button>
           <button onClick={() => setRelatorioAberto(true)} className="btn btn-laranja">
             📄 RELATÓRIO
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
+          <button onClick={() => setNovaUnidadeAberta(true)} className="btn btn-fantasma" style={{ fontSize: 12, padding: 12 }}>
+            + QUADRA/LOTE
+          </button>
+          <button onClick={() => setLeituraAvulsaAberta(true)} className="btn btn-fantasma" style={{ fontSize: 12, padding: 12 }}>
+            + LEITURA AVULSA
           </button>
         </div>
 
@@ -109,6 +132,25 @@ export default function CondominioDetalhe() {
           unidades={unidades}
           mesSelecionado={mes}
           onFechar={() => setRelatorioAberto(false)}
+        />
+      )}
+
+      {novaUnidadeAberta && (
+        <NovaUnidadeForm
+          condominio={condominio}
+          unidades={unidades}
+          onFechar={() => setNovaUnidadeAberta(false)}
+          onSalvo={aoCadastrarUnidade}
+        />
+      )}
+
+      {leituraAvulsaAberta && (
+        <LeituraAvulsaForm
+          condominio={condominio}
+          unidades={unidades}
+          mesReferencia={mes}
+          onFechar={() => setLeituraAvulsaAberta(false)}
+          onSalvo={aoSalvarLeituraAvulsa}
         />
       )}
     </div>
