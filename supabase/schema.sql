@@ -23,6 +23,7 @@ create table if not exists unidades (
   leitura_hidrometro_antigo numeric,   -- última leitura do hidrômetro antigo (quando substituído)
   observacao text,
   ordem int not null default 0,
+  avulsa boolean not null default false, -- true = cadastrada pela equipe em campo (fora da planilha original), ex: portaria extra
   criado_em timestamptz not null default now(),
   unique (condominio_id, etiqueta)
 );
@@ -76,6 +77,12 @@ create policy "autenticados leem condominios" on condominios
 drop policy if exists "autenticados leem unidades" on unidades;
 create policy "autenticados leem unidades" on unidades
   for select using (auth.role() = 'authenticated');
+
+-- Permite à equipe cadastrar quadra/lote novo ou uma leitura avulsa (ex: portaria)
+-- direto pelo app, sem precisar do André rodar SQL manualmente.
+drop policy if exists "autenticados inserem unidades" on unidades;
+create policy "autenticados inserem unidades" on unidades
+  for insert with check (auth.role() = 'authenticated');
 
 drop policy if exists "autenticados leem leituras" on leituras;
 create policy "autenticados leem leituras" on leituras
