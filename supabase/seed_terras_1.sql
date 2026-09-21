@@ -10,7 +10,7 @@ on conflict (slug) do nothing;
 
 insert into unidades (condominio_id, etiqueta, quadra, lote, fase, ano_fabricacao, status_hidrometro, ano_substituicao, leitura_hidrometro_antigo, observacao, ordem, avulsa)
 select c.id, v.etiqueta, v.quadra, v.lote, v.fase, v.ano_fabricacao, v.status_hidrometro, v.ano_substituicao, v.leitura_hidrometro_antigo, v.observacao, v.ordem, v.avulsa
-from condominios c where c.slug = 'terras-1'
+from condominios c
 cross join (values
   ('C01', 'C', '01', 'CASA', null::int, null::text, null::int, null::numeric, null::text, 1, false),
   ('C03', 'C', '03', 'CASA', null::int, null::text, null::int, null::numeric, null::text, 2, false),
@@ -455,4 +455,5 @@ cross join (values
   ('LAZER', 'AVULSO', 'LAZER', 'OUTRO', null::int, null::text, null::int, null::numeric, null::text, 441, true),
   ('SEDE', 'AVULSO', 'SEDE', 'OUTRO', null::int, null::text, null::int, null::numeric, null::text, 442, true)
 ) as v(etiqueta, quadra, lote, fase, ano_fabricacao, status_hidrometro, ano_substituicao, leitura_hidrometro_antigo, observacao, ordem, avulsa)
+where c.slug = 'terras-1'
 on conflict (condominio_id, etiqueta) do nothing;
