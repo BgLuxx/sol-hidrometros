@@ -6,6 +6,8 @@ const AZUL = 'FF0E6BA8'
 const LARANJA = 'FFF15A24'
 const CINZA_CLARO = 'FFF2F2F2'
 const BRANCO = 'FFFFFFFF'
+const VERMELHO = 'FFD92D20'
+const CONSUMO_ALTO = 50
 
 function medidorLabel(u) {
   if (u.status_hidrometro === 'SUBSTITUIDO') return `SUBSTITUÍDO ${u.ano_substituicao || ''}`.trim()
@@ -97,6 +99,12 @@ export async function gerarRelatorio({ condominio, unidades, mesAnterior, mesAtu
       row.eachCell({ includeEmpty: true }, (c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFE0E0' } } })
     } else if (u.status_hidrometro === 'SUBSTITUIDO') {
       row.eachCell({ includeEmpty: true }, (c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF3CD' } } })
+    }
+    // Consumo fora do normal (> 50 m³ no mês): destaca em vermelho pra chamar atenção
+    // (possível vazamento ou erro de leitura). Só a fonte do número muda de cor,
+    // sem mexer no fundo da linha (que já pode estar marcado por status do hidrômetro acima).
+    if (consumo != null && consumo > CONSUMO_ALTO) {
+      row.getCell(6).font = { size: 10, name: 'Arial', bold: true, color: { argb: VERMELHO } }
     }
     linha += 1
   }
