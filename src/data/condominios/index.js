@@ -1,5 +1,6 @@
 import figueiraGardenUnidades from './figueira-garden.json'
 import terras1Unidades from './terras-1.json'
+import terras2Unidades from './terras-2.json'
 
 // Cadastro estático dos condomínios: usado para popular o Supabase (seed)
 // e como referência offline (nomes, slugs) mesmo sem sinal.
@@ -15,5 +16,10 @@ export const CONDOMINIOS_SEED = {
     slug: 'terras-1',
     nome: 'Residencial Terras 1',
     unidades: terras1Unidades,
+  },
+  'terras-2': {
+    slug: 'terras-2',
+    nome: 'Terras de Atibaia II',
+    unidades: terras2Unidades,
   },
 }
