@@ -6,6 +6,7 @@ import { hojeISO } from '../lib/format'
 export default function LancamentoForm({ condominio, unidades, mesReferencia, lancamentoExistente, onFechar, onSalvo }) {
   const editando = Boolean(lancamentoExistente)
   const inputFotoRef = useRef(null)
+  const inputGaleriaRef = useRef(null)
 
   const unidadeInicial = editando ? unidades.find((u) => u.id === lancamentoExistente.unidadeId) : null
 
@@ -102,18 +103,39 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
           {/* Foto */}
           <div>
             <label style={rotulo}>Foto do hidrômetro</label>
-            <input ref={inputFotoRef} type="file" accept="image/*" onChange={aoEscolherFoto} style={{ display: 'none' }} />
+            {/* Dois inputs separados: um força a câmera (capture="environment"),
+                outro abre a galeria normal. Em alguns Android (ex: Motorola),
+                um input de arquivo sem "capture" abre direto a galeria/arquivos
+                em vez de dar a opção de câmera — por isso o botão principal
+                "TIRAR FOTO" usa o input com capture, garantindo que sempre
+                abre a câmera, com a galeria como alternativa explícita. */}
+            <input ref={inputFotoRef} type="file" accept="image/*" capture="environment" onChange={aoEscolherFoto} style={{ display: 'none' }} />
+            <input ref={inputGaleriaRef} type="file" accept="image/*" onChange={aoEscolherFoto} style={{ display: 'none' }} />
             {fotoPreview ? (
               <div style={{ position: 'relative' }}>
                 <img src={fotoPreview} alt="Foto do hidrômetro" style={{ width: '100%', borderRadius: 12, maxHeight: 260, objectFit: 'cover' }} />
-                <button onClick={() => inputFotoRef.current?.click()} className="btn btn-fantasma" style={{ position: 'absolute', bottom: 10, right: 10, background: '#fff', fontSize: 12, padding: '8px 12px' }}>
-                  Trocar foto
-                </button>
+                <div style={{ position: 'absolute', bottom: 10, right: 10, display: 'flex', gap: 6 }}>
+                  <button onClick={() => inputGaleriaRef.current?.click()} className="btn btn-fantasma" style={{ background: '#fff', fontSize: 12, padding: '8px 12px' }}>
+                    Galeria
+                  </button>
+                  <button onClick={() => inputFotoRef.current?.click()} className="btn btn-fantasma" style={{ background: '#fff', fontSize: 12, padding: '8px 12px' }}>
+                    Trocar foto
+                  </button>
+                </div>
               </div>
             ) : (
-              <button onClick={() => inputFotoRef.current?.click()} className="btn btn-azul btn-bloco" disabled={processandoFoto}>
-                📷 {processandoFoto ? 'PROCESSANDO...' : 'TIRAR FOTO'}
-              </button>
+              <>
+                <button onClick={() => inputFotoRef.current?.click()} className="btn btn-azul btn-bloco" disabled={processandoFoto}>
+                  📷 {processandoFoto ? 'PROCESSANDO...' : 'TIRAR FOTO'}
+                </button>
+                <button
+                  onClick={() => inputGaleriaRef.current?.click()}
+                  disabled={processandoFoto}
+                  style={{ background: 'transparent', color: 'var(--texto-suave)', fontSize: 13, textDecoration: 'underline', padding: '8px 0', textTransform: 'none', fontWeight: 400 }}
+                >
+                  ou escolher da galeria
+                </button>
+              </>
             )}
           </div>
 
