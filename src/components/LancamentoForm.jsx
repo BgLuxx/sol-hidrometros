@@ -44,6 +44,11 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
       const comprimida = await comprimirImagem(arquivo)
       setFotoBlob(comprimida)
       setFotoPreview(URL.createObjectURL(comprimida))
+    } catch (e) {
+      // Pouca memória para reduzir a foto: guarda a original em vez de perdê-la.
+      console.error(e)
+      setFotoBlob(arquivo)
+      setFotoPreview(URL.createObjectURL(arquivo))
     } finally {
       setProcessandoFoto(false)
     }
@@ -67,7 +72,7 @@ export default function LancamentoForm({ condominio, unidades, mesReferencia, la
       onSalvo()
     } catch (e) {
       console.error(e)
-      setErro('Não foi possível salvar. Tente novamente.')
+      setErro(e?.name === 'QuotaExceededError' ? 'Celular sem espaço: libere espaço e toque em SALVAR de novo. A leitura ainda não foi salva.' : 'Não foi possível salvar. Tente novamente.')
     } finally {
       setSalvando(false)
     }

@@ -34,6 +34,11 @@ export default function LeituraAvulsaForm({ condominio, unidades, mesReferencia,
       const comprimida = await comprimirImagem(arquivo)
       setFotoBlob(comprimida)
       setFotoPreview(URL.createObjectURL(comprimida))
+    } catch (e) {
+      // Pouca memória para reduzir a foto: guarda a original em vez de perdê-la.
+      console.error(e)
+      setFotoBlob(arquivo)
+      setFotoPreview(URL.createObjectURL(arquivo))
     } finally {
       setProcessandoFoto(false)
     }
@@ -64,7 +69,7 @@ export default function LeituraAvulsaForm({ condominio, unidades, mesReferencia,
       if (e?.message === 'já_existe') {
         setErro(`"${etiqueta}" já está cadastrada. Use "Lançar Hidrômetro" pra lançar a leitura deste mês.`)
       } else {
-        setErro('Não foi possível salvar. Tente novamente.')
+        setErro(e?.name === 'QuotaExceededError' ? 'Celular sem espaço: libere espaço e toque em SALVAR de novo. A leitura ainda não foi salva.' : 'Não foi possível salvar. Tente novamente.')
       }
     } finally {
       setSalvando(false)

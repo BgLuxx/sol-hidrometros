@@ -5,12 +5,13 @@ import {
   salvarLeiturasCache, lerLeiturasCache,
   adicionarPendente, listarPendentesPorMes, removerPendente, atualizarPendente,
   contarPendentes,
-  adicionarUnidadePendente, listarUnidadesPendentes, listarTodasUnidadesPendentes, removerUnidadePendente,
+  adicionarUnidadePendente, listarUnidadesPendentes, listarTodasUnidadesPendentes, removerUnidadePendente, atualizarUnidadePendente,
 } from './localdb'
 import { CONDOMINIOS_SEED } from '../data/condominios'
 
 const BUCKET = 'hidrometros'
 const TEMPO_LIMITE_MS = 7000 // sinal fraco: não trava esperando, cai pro modo offline
+const TEMPO_LIMITE_FILA_FOTO_MS = 60000 // na fila, a foto pode demorar: sem pressa e sem ninguém esperando na tela
 
 export function estaOnline() {
   return typeof navigator === 'undefined' ? true : navigator.onLine
@@ -48,9 +49,27 @@ function marcarSinalOk() {
   sinalRuimAteMs = 0
 }
 
+function deveTentarRede() {
+  return estaOnline() && supabase && !sinalPareceRuim()
+}
+
+// Falha de conexão: vale parar e tentar depois. Erro do banco sobre UM item
+// (ex.: dado inválido): não pode segurar os outros itens da fila.
+function ehErroDeAcesso(e) {
+  const status = Number(e?.status ?? e?.statusCode)
+  return status === 401 || status === 403 || e?.code === '42501' || e?.code === 'PGRST301' || /jwt|row-level security/i.test(e?.message || '')
+}
+function ehErroDeRede(e) {
+  if (e?.message === 'tempo_esgotado_sinal_fraco' || e instanceof TypeError) return true
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(e?.message || '')) return true
+  const status = Number(e?.status ?? e?.statusCode)
+  if (status >= 500) return true
+  return !e?.code && !status
+}
+
 // ---------------- Condomínios ----------------
 export async function carregarCondominios() {
-  if (estaOnline() && supabase) {
+  if (deveTentarRede()) {
     try {
       const { data, error } = await comLimiteDeTempo(
         supabase.from('condominios').select('id, slug, nome').order('nome'),
@@ -62,6 +81,7 @@ export async function carregarCondominios() {
       }
     } catch (e) {
       console.warn('Falha ao buscar condomínios online (ou sinal fraco demorou), usando cache local.', e)
+      marcarSinalRuim()
     }
   }
   const cache = await lerCondominiosCache()
@@ -73,7 +93,7 @@ export async function carregarCondominios() {
 // ---------------- Unidades (quadras/lotes) ----------------
 export async function carregarUnidades(condominio) {
   let base = []
-  if (estaOnline() && supabase) {
+  if (deveTentarRede() && ehUuid(condominio.id)) {
     try {
       const { data, error } = await comLimiteDeTempo(
         supabase.from('unidades').select('*').eq('condominio_id', condominio.id).order('ordem'),
@@ -85,17 +105,61 @@ export async function carregarUnidades(condominio) {
       }
     } catch (e) {
       console.warn('Falha ao buscar unidades online (ou sinal fraco demorou), usando cache local.', e)
+      marcarSinalRuim()
     }
   }
   if (!base.length) {
     base = await lerUnidadesCache(condominio.slug)
-    if (!base.length) base = CONDOMINIOS_SEED[condominio.slug]?.unidades || []
+    if (!base.length) base = unidadesDoCadastroEmbutido(condominio.slug)
   }
 
   // Quadra/lote (ou leitura avulsa) cadastrada em campo e ainda não sincronizada:
   // já aparece na lista/seleção normalmente, marcada como pendente.
   const unidadesPendentes = await listarUnidadesPendentes(condominio.slug)
   return [...base, ...unidadesPendentes.map(unidadePendenteParaUnidade)]
+}
+
+const ehUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v))
+
+// Cadastro embutido no app: não tem o id do banco. O id provisório abaixo é
+// trocado pelo id real na sincronização, procurando pela etiqueta.
+function unidadesDoCadastroEmbutido(slug) {
+  return (CONDOMINIOS_SEED[slug]?.unidades || []).map((u) => ({ ...u, id: `seed-${slug}-${u.etiqueta}` }))
+}
+
+async function idRealDoCondominio(slug) {
+  const { data, error } = await comLimiteDeTempo(supabase.from('condominios').select('id').eq('slug', slug))
+  if (error) throw error
+  return data?.[0]?.id || null
+}
+
+async function idRealDaUnidade(slug, etiqueta) {
+  const condominioId = await idRealDoCondominio(slug)
+  if (!condominioId) return null
+  const { data, error } = await comLimiteDeTempo(
+    supabase.from('unidades').select('id').eq('condominio_id', condominioId).eq('etiqueta', etiqueta),
+  )
+  if (error) throw error
+  return data?.[0]?.id || null
+}
+
+// Baixa as unidades de TODOS os condomínios sempre que houver sinal, para o
+// funcionário poder ir a um condomínio que nunca abriu e já encontrá-lo pronto.
+let ultimoPreparoMs = 0
+export async function prepararUsoOffline() {
+  if (!deveTentarRede() || Date.now() - ultimoPreparoMs < 10 * 60 * 1000) return
+  try {
+    const { data } = await supabase.auth.getSession()
+    if (!data.session) return
+    ultimoPreparoMs = Date.now()
+    const condominios = await carregarCondominios()
+    for (const c of condominios) {
+      if (!deveTentarRede() || !ehUuid(c.id)) continue
+      await carregarUnidades(c)
+    }
+  } catch (e) {
+    console.warn('Não foi possível preparar o uso offline agora.', e)
+  }
 }
 
 function unidadePendenteParaUnidade(p) {
@@ -121,7 +185,7 @@ function unidadePendenteParaUnidade(p) {
 // ---------------- Leituras (lançamentos de um mês) ----------------
 export async function carregarLeituras(condominio, mesReferencia) {
   let base = []
-  if (estaOnline() && supabase) {
+  if (deveTentarRede() && ehUuid(condominio.id)) {
     try {
       const { data, error } = await comLimiteDeTempo(
         supabase
@@ -135,6 +199,7 @@ export async function carregarLeituras(condominio, mesReferencia) {
       await salvarLeiturasCache(condominio.slug, mesReferencia, base)
     } catch (e) {
       console.warn('Falha ao buscar leituras online, usando cache local.', e)
+      marcarSinalRuim()
       base = await lerLeiturasCache(condominio.slug, mesReferencia)
     }
   } else {
@@ -198,7 +263,7 @@ function pendenteParaLeitura(p) {
 // Usado pelos botões "+ QUADRA/LOTE" e "+ LEITURA AVULSA" na tela do condomínio.
 // unidadeNova: { etiqueta, quadra, lote, fase, anoFabricacao, avulsa }
 export async function criarUnidade({ condominio, etiqueta, quadra, lote, fase, anoFabricacao, avulsa = false }) {
-  if (estaOnline() && supabase && !sinalPareceRuim()) {
+  if (deveTentarRede() && ehUuid(condominio.id)) {
     try {
       const payload = {
         condominio_id: condominio.id,
@@ -263,7 +328,7 @@ export async function salvarLancamento({
     return { pendente: true }
   }
 
-  if (estaOnline() && supabase && !sinalPareceRuim()) {
+  if (deveTentarRede() && ehUuid(unidade.id)) {
     try {
       let fotoPath = null
       let fotoUrl = null
@@ -327,7 +392,7 @@ export async function excluirLancamento(condominio, lancamento) {
     return
   }
 
-  if (estaOnline() && supabase) {
+  if (deveTentarRede()) {
     try {
       const { error } = await comLimiteDeTempo(supabase.from('leituras').delete().eq('id', lancamento.id))
       if (error) throw error
@@ -378,6 +443,10 @@ export async function tentarSincronizar() {
   }
   sincronizando = true
   try {
+    // Sem sessão válida o envio seria recusado. A fila fica intacta até haver login.
+    const { data: dadosSessao } = await supabase.auth.getSession()
+    if (!dadosSessao.session) return
+
     const { getDB } = await import('./localdb')
     const db = await getDB()
 
@@ -387,17 +456,24 @@ export async function tentarSincronizar() {
     const unidadesPendentes = await listarTodasUnidadesPendentes()
     for (const u of unidadesPendentes) {
       try {
+        const condominioId = ehUuid(u.condominioId) ? u.condominioId : await idRealDoCondominio(u.condominioSlug)
+        if (!condominioId) throw Object.assign(new Error('condominio_nao_encontrado'), { code: 'SOL001' })
         const payload = {
-          condominio_id: u.condominioId,
+          condominio_id: condominioId,
           etiqueta: u.etiqueta, quadra: u.quadra, lote: u.lote, fase: u.fase,
           ano_fabricacao: u.ano_fabricacao ?? null,
           avulsa: u.avulsa || false,
           ordem: 9999,
         }
         const resultado = await comLimiteDeTempo(supabase.from('unidades').insert(payload).select().single())
-        if (resultado.error) throw resultado.error
+        let idReal = resultado.data?.id
+        if (resultado.error) {
+          // Outro celular já cadastrou a mesma etiqueta: aproveita a unidade existente.
+          if (resultado.error.code !== '23505') throw resultado.error
+          idReal = await idRealDaUnidade(u.condominioSlug, u.etiqueta)
+          if (!idReal) throw resultado.error
+        }
         const idLocal = `local-${u.localId}`
-        const idReal = resultado.data.id
         // Qualquer leitura na fila que aponte pra essa unidade local passa a apontar pro id de verdade.
         const leiturasLigadas = await db.getAll('pendentes')
         for (const lp of leiturasLigadas) {
@@ -409,8 +485,10 @@ export async function tentarSincronizar() {
         marcarSinalOk()
       } catch (e) {
         console.warn('Unidade continua pendente (falhou ao sincronizar):', u.etiqueta, e)
-        marcarSinalRuim()
-        break // sinal ruim agora — as leituras dependentes dela ficam pra próxima rodada
+        if (ehErroDeAcesso(e)) return
+        if (ehErroDeRede(e)) { marcarSinalRuim(); return }
+        await atualizarUnidadePendente(u.localId, { tentativas: (u.tentativas || 0) + 1, ultimoErro: e?.message || String(e) })
+        // Erro só desta unidade: segue com as demais.
       }
     }
 
@@ -429,19 +507,28 @@ export async function tentarSincronizar() {
           await removerPendente(p.localId)
           continue
         }
+        // Lançada a partir do cadastro embutido (ou salva sem id por versões
+        // antigas do app): acha a unidade real pela etiqueta.
+        let unidadeId = p.unidadeId
+        if (!ehUuid(unidadeId)) {
+          unidadeId = await idRealDaUnidade(p.condominioSlug, p.etiqueta)
+          if (!unidadeId) throw Object.assign(new Error('unidade_nao_encontrada'), { code: 'SOL002' })
+          await atualizarPendente(p.localId, { unidadeId })
+        }
         let fotoPath = null
         let fotoUrl = null
         if (p.fotoBlob) {
           const caminho = `${p.condominioSlug}/${p.mesReferencia}/${p.etiqueta}-${p.localId}-${Date.now()}.jpg`
           const { error: upErr } = await comLimiteDeTempo(
             supabase.storage.from(BUCKET).upload(caminho, p.fotoBlob, { contentType: 'image/jpeg', upsert: true }),
+            TEMPO_LIMITE_FILA_FOTO_MS,
           )
           if (upErr) throw upErr
           fotoPath = caminho
           fotoUrl = supabase.storage.from(BUCKET).getPublicUrl(caminho).data.publicUrl
         }
         const payload = {
-          unidade_id: p.unidadeId,
+          unidade_id: unidadeId,
           mes_referencia: p.mesReferencia,
           leitura: p.leitura,
           data_leitura: p.dataLeitura,
@@ -458,11 +545,14 @@ export async function tentarSincronizar() {
         marcarSinalOk()
       } catch (e) {
         console.warn('Item continua pendente (falhou ao sincronizar):', p.etiqueta, e)
-        await atualizarPendente(p.localId, { tentativas: (p.tentativas || 0) + 1 })
-        marcarSinalRuim()
-        break // sinal ruim agora — não vale a pena pagar o prazo de novo pra cada item restante da fila
+        await atualizarPendente(p.localId, { tentativas: (p.tentativas || 0) + 1, ultimoErro: e?.message || String(e) })
+        if (ehErroDeAcesso(e)) return
+        if (ehErroDeRede(e)) { marcarSinalRuim(); return }
+        // Erro só deste item: ele continua guardado, e os demais seguem sendo enviados.
       }
     }
+  } catch (e) {
+    console.warn('Sincronização interrompida; a fila continua salva no aparelho.', e)
   } finally {
     sincronizando = false
     await avisarOuvintes()
@@ -472,10 +562,26 @@ export async function tentarSincronizar() {
 if (typeof window !== 'undefined') {
   // Uma transição real pra "online" (ex: pegou wifi de verdade) merece uma
   // chance nova, mesmo que estivéssemos numa pausa por sinal ruim.
-  window.addEventListener('online', () => { marcarSinalOk(); tentarSincronizar() })
+  // Ao sair do modo avião, a rede demora alguns segundos para funcionar de
+  // verdade e a primeira tentativa costuma falhar. Por isso repete em sequência.
+  window.addEventListener('online', () => {
+    for (const espera of [0, 3000, 10000, 25000]) {
+      setTimeout(() => {
+        if (!estaOnline()) return
+        marcarSinalOk()
+        tentarSincronizar()
+        prepararUsoOffline()
+      }, espera)
+    }
+  })
+  // O Android suspende apps em segundo plano e os timers abaixo param junto.
+  // Ao voltar para a tela, tenta de novo na hora, sem esperar a pausa de sinal ruim.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && estaOnline()) { marcarSinalOk(); tentarSincronizar() }
+  })
   setInterval(() => { if (estaOnline()) tentarSincronizar() }, 30000)
   // Tenta sincronizar assim que o app abre — cobre o caso de reabrir o app
   // já com sinal (ex: lançou de manhã sem sinal, fechou o app, reabriu à
   // tarde já com sinal) sem precisar esperar os 30s do intervalo acima.
-  if (estaOnline()) tentarSincronizar()
+  if (estaOnline()) { tentarSincronizar(); prepararUsoOffline() }
 }

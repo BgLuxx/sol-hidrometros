@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  define: { __APP_VERSAO__: JSON.stringify(process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'local') },
   plugins: [
     react(),
     VitePWA({
@@ -27,6 +28,10 @@ export default defineConfig({
         // App shell + code precached -> app abre offline.
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
+        // O padrão é 2 MiB, e o Workbox IGNORA em silêncio o arquivo maior que
+        // isso: o app simplesmente deixaria de abrir offline. Como o bundle
+        // cresce a cada condomínio cadastrado (já tem 1,6 MB), o limite sobe.
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         // Sem isso, o Service Worker instalado na PRIMEIRA visita só passa a
         // controlar a página a partir da PRÓXIMA vez que abrir o site — ou
         // seja, se a pessoa instalar e for direto pro modo avião, ainda não

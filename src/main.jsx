@@ -4,7 +4,10 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { AuthProvider } from './context/AuthContext'
 import { OnlineProvider } from './context/OnlineContext'
+import { pedirArmazenamentoPersistente } from './lib/armazenamento'
 import './index.css'
+
+pedirArmazenamentoPersistente()
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Header from '../components/Header'
-import { carregarCondominios } from '../lib/sync'
+import { carregarCondominios, prepararUsoOffline, tentarSincronizar } from '../lib/sync'
 
 export default function Condominios() {
   const [lista, setLista] = useState(null)
@@ -9,6 +9,8 @@ export default function Condominios() {
 
   useEffect(() => {
     carregarCondominios().then(setLista)
+    // Logo depois do login já deixa tudo pronto para trabalhar sem sinal.
+    prepararUsoOffline().then(tentarSincronizar)
   }, [])
 
   return (
@@ -34,6 +36,11 @@ export default function Condominios() {
             </button>
           ))}
         </div>
+        <p style={{ marginTop: 24, textAlign: 'center' }}>
+          <button onClick={() => navigate('/diagnostico')} style={{ background: 'transparent', color: 'var(--texto-suave)', fontSize: 12, textDecoration: 'underline', textTransform: 'none', fontWeight: 400 }}>
+            Diagnóstico do aparelho
+          </button>
+        </p>
       </div>
     </div>
   )
