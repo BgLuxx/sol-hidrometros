@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext'
 import Login from './pages/Login'
 import Condominios from './pages/Condominios'
 import CondominioDetalhe from './pages/CondominioDetalhe'
+import Diagnostico from './pages/Diagnostico'
 
 function Protegida({ children }) {
   const { logado, carregando } = useAuth()
@@ -23,6 +24,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/diagnostico" element={<Diagnostico />} />
       <Route path="/" element={<Protegida><Condominios /></Protegida>} />
       <Route path="/condominio/:slug" element={<Protegida><CondominioDetalhe /></Protegida>} />
       <Route path="*" element={<Navigate to="/" replace />} />

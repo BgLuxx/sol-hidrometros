@@ -4,8 +4,20 @@ import { useOnline } from '../context/OnlineContext'
 
 export default function Header({ titulo, voltar }) {
   const navigate = useNavigate()
-  const { sair } = useAuth()
+  const { sair, precisaEntrarDeNovo } = useAuth()
   const { online, pendentes } = useOnline()
+
+  async function aoSair() {
+    // Sem sinal não dá para entrar de novo, e com itens na fila o envio pararia.
+    if (!online || pendentes > 0) {
+      window.alert(pendentes > 0
+        ? `Há ${pendentes} item(ns) para enviar. Conecte à internet e aguarde o envio antes de sair.`
+        : 'Sem internet não é possível entrar de novo. Saia somente quando tiver sinal.')
+      return
+    }
+    await sair()
+    navigate('/login')
+  }
 
   return (
     <>
@@ -17,16 +29,21 @@ export default function Header({ titulo, voltar }) {
         )}
         <img src="/logo.png" alt="SOL Soluções" />
         <h1>{titulo}</h1>
-        <button onClick={sair} title="Sair" style={{ background: 'transparent', color: '#fff', fontSize: 12, padding: 6 }}>
+        <button onClick={aoSair} title="Sair" style={{ background: 'transparent', color: '#fff', fontSize: 12, padding: 6 }}>
           SAIR
         </button>
       </div>
       {!online && (
         <div className="status-off">
-          SEM SINAL {pendentes > 0 ? `— ${pendentes} ITEM(S) SALVOS NO APARELHO` : ''} — NÃO FECHE O APP NEM APAGUE OS DADOS DO NAVEGADOR ANTES DE SINCRONIZAR
+          SEM SINAL {pendentes > 0 ? `— ${pendentes} ITEM(S) SALVOS NO APARELHO` : ''} — PODE FECHAR O APP, MAS NÃO APAGUE OS DADOS DO NAVEGADOR ANTES DE SINCRONIZAR
         </div>
       )}
-      {online && pendentes > 0 && <div className="status-sync">SINCRONIZANDO {pendentes} ITEM(S) PENDENTE(S)...</div>}
+      {online && precisaEntrarDeNovo && (
+        <button onClick={() => navigate('/login')} className="status-off" style={{ width: '100%' }}>
+          TOQUE AQUI PARA ENTRAR DE NOVO E ENVIAR OS LANÇAMENTOS — NADA FOI PERDIDO
+        </button>
+      )}
+      {online && !precisaEntrarDeNovo && pendentes > 0 && <div className="status-sync">SINCRONIZANDO {pendentes} ITEM(S) PENDENTE(S)...</div>}
     </>
   )
 }
